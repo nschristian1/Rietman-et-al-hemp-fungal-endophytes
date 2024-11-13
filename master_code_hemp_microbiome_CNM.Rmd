@@ -1,0 +1,490 @@
+---
+title: "Phytobiomes_hemp-microbiome-analysis"
+author: "Allison Rietman"
+date: "2024-10-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Code Overview
+
+This document contains all code for Rietman et al. 2024 Phytobiomes manuscript which investigates the effects of fungicide application and pathogen inoculation on field grown hemp AND a biological control trial which challenges corn earworm larvae with diet inoculated with an isolated fungal endophyte recovered from hemp leaves. 
+
+Fungicide-Pathogen Inoculation Trial
+1. Endophyte community analysis
+2. Diversity metric analysis
+3. Indicator species analysis
+4. Bacterial abundance analysis
+5. Visual presence of pathogen infection analysis
+
+Biological Control Trial
+1. Choice trial analyses
+2. Survival trial analysis
+
+
+## Load packages and data 
+```{r pkgs}
+library(ggplot2)
+library(ggpubr)
+library(vegan)
+library(car)
+library(lme4)
+library(viridis)
+library(dplyr)
+library(tidyverse)
+library(reshape2)
+library(spaa)
+library(indicspecies)
+library(emmeans)
+library(multcomp)
+library(plotrix)
+library(survival)
+library(survminer)
+```
+
+## Here, we are uploading all data for subsequent analyses and adjusting structure of dataset for easy use downstream
+```{r read data}
+pivot_data <-read.csv("otu_matrix_S1_seaquencher.csv",
+                      header = TRUE, row.names = 1) 
+
+env <-read.csv("new_env_S21_fungicide.csv", header=TRUE, row.names=1, sep=",")
+  env$plot.no<-as.factor(env$plot.no)
+  env$treatment<-as.factor(env$treatment)
+  
+LMA.data <- read.csv("plant-growth-metrics-S21.csv", header = TRUE)
+  LMA.data$plant.height.cm <- as.numeric(LMA.data$plant.height.cm)
+  LMA.data$plot.no<-as.factor(LMA.data$plot.no)
+  LMA.data$sample.id<-as.factor(LMA.data$sample.id)
+  LMA.data$treatment<-as.factor(LMA.data$treatment)
+  
+new.bac <- read.csv("new_bacteria_abun_S21.csv")
+  new.bac$treatment<-as.factor(new.bac$treatment)
+  new.bac$plot.no<-as.factor(new.bac$plot.no)
+  new.bac$sample.id<-as.factor(new.bac$sample.id)
+
+choice <- read.csv("ChoiceTrialData_CornEarwormOR.csv", header = TRUE, sep = ",")
+  choice$SubjectID<-as.factor(choice$SubjectID)
+  choice$choice<-as.factor(choice$choice)
+  choice$day<-as.factor(choice$day)
+  
+food <- read.csv("ChoiceTrialData_FoodMass.csv", header = TRUE, sep = ",")
+  food$subjectID<-as.factor(food$subjectID)
+  food$foodtype<-as.factor(food$foodtype)
+  # Add in a variable for difference in starting and beginning food mass
+  food$food.diff <- (food$initialfoodmass - food$finalfoodmass)
+  
+levels <- read.csv("LevelsTrialData_CornEarwormOR.csv", header = TRUE, sep = ",")
+  levels$SubjectID<-as.factor(levels$SubjectID)
+  levels$Trial<-as.factor(levels$Trial)
+  levels$Day<-as.factor(levels$Day)
+  levels$Dead<-as.factor(levels$Dead)
+  
+corncox <- read.csv("cox_cornearnworm.csv", header = TRUE, sep = ",")
+  # NOTE - status column indicates if dead, 1 = dead, 0 = pupated
+  
+```
+
+## ENDOPHYTE COMMUNITY ANALYSIS 
+Here, our data undergoes numerous steps and filtering before the results of the analysis. We first remove singletons from our dataset, the perform a hellinger correction, then we make the ordination of our community data
+
+```{r community analysis}
+
+colSums(pivot_data) # get the sum of fungal presence in each column
+
+data_no_sing<-pivot_data[colSums(pivot_data)>1 ] # only include columns that have sums greater than 1, 
+                                                 # i.e., no singletons
+colSums(data_no_sing) # get the sum of fungal presence in each column W/O singletons
+rowSums(data_no_sing) # sum of fungi in each leaf
+
+# make data with row sums (fungi in each leaf) 
+data_row_sum <- data_no_sing[ rowSums(data_no_sing)!=0, ] 
+    
+# get rid of rows (samples) that don't have any fungi present
+# Check to see if all rows have values greater than 0
+sort(rowSums(data_row_sum))
+str(data_row_sum)
+
+# Use pivot table w/o blank rows to run data
+# Use hellinger method
+data_hel <- decostand(data_row_sum, method = "hellinger")
+data_hel # check to see if values are less than 1
+
+# make ordination
+ord<-metaMDS(data_hel, trymax=20,k=2) # must have vegan loaded
+ord
+ord$points
+
+```
+
+Now, we are using our environmental data and matching it with our transformed data from above that omits singletons. 
+
+```{r}
+
+# remove rows (ie. samples) that do not have any colonization from env data
+env2<-env[row.names(env) %in% row.names(data_row_sum),]
+env2$Treatment<-as.factor(env2$treatment)
+str(env2)
+
+
+# Determine how many plots represent the treatment groups in adjusted data
+env2 %>% count(treatment)
+
+```
+
+We plot the results from the ordination. We included two plots 1) the plot which excludes extreme points and 2) one that includes all points. We chose to use the plot that excludes the extreme points so that the data could be visualized. We denote this in our paper. 
+
+```{r echo=TRUE}
+## use below code to get rid of "outlier" plots 106-1, 303-1, 203-1; I changed axis limits
+
+plot(ord, type = "n", main="treatment", ylim = c(-1,1), xlim = c(-3, 3))
+  # adjusted axis limits again to center the ordination on the plot 
+#plot(ord, type = "n", main="treatment")
+points(ord, display = "sites", cex = 1.5, pch=21, col="black", bg=env2$Treatment)
+```
+
+```{r echo=TRUE}
+## OR use this code to show all points
+
+plot(ord, type = "n", main="all points, treatment")
+  # adjusted axis limits again to center the ordination on the plot 
+plot(ord, type = "n", main="treatment")
+points(ord, display = "sites", cex = 1.5, pch=21, col="black", bg=env2$Treatment) 
+ordiellipse(ord, env2$Treatment, label= TRUE, col="black", kind=c("sd"))
+    # putting ellipses around to show treatment group clustering
+ordilabel(ord, display = "sites")
+    # label with sites for diagnostic purposes; not for publication 
+
+```
+
+After all of that, we run our permutation on the community data
+
+```{r permutation of community data}
+
+# Does treatment have an effect on endo community? 
+adonis2(data_hel ~ env2$Treatment, permutations = 999, method = "bray")
+
+# Calculate Bray-Curtis distances between samples
+dis <- vegdist(data_hel)
+
+## Calculate multivariate dispersions for each treatment
+mod <- betadisper(dis, env2$Treatment)
+mod
+
+```
+
+Now, let's look at the spread of the different groups 
+ permutation-based test of multivariate homogeneity of group dispersions (variances); looks not at composition differences between groups, but differences in homogeneity
+
+```{r echo=TRUE}
+
+# Permutation test for F
+pmod <- permutest(mod, permutations = 99, pairwise = FALSE)
+pmod
+```
+
+```{r echo=TRUE}
+# Tukey's Honest Significant Differences
+(mod.HSD <- TukeyHSD(mod))
+plot(mod.HSD)
+
+  # Together these results suggest that the groups differ significantly in their dispersion (spread)
+  # Fungicide group has more spread than natural or inoculation group
+
+```
+
+## DIVERSITY METRIC ANALYSES OF ENDOPHYTE COMMUNITY
+
+In this section, we calculate Shannon diversity and species richness.
+
+First, let's tackle Shannon diversity
+
+```{r shannon diversity}
+
+d <- diversity(pivot_data, index = "shannon")
+shannon <- as.data.frame(d)
+shannon$Treatment <- env$treatment
+shannon$Height <- env$plant.height.cm
+shannon$Plot<-env$plot.no
+
+shannon
+
+# Calculating average Shannon D for each treatment group
+d_natural<-shannon[which(shannon$Treatment == "natural"),]
+d_innoculation<-shannon[which(shannon$Treatment == "innoculation"),]
+d_fungicide<-shannon[which(shannon$Treatment == "fungicide"),]
+
+mean(d_natural$d)
+mean(d_innoculation$d)
+mean(d_fungicide$d)
+
+median(d_natural$d)
+median(d_innoculation$d)
+median(d_fungicide$d)
+```
+
+```{r echo=TRUE}
+# Run ANOVA on Shannon diversity 
+anova_diversity2 <- lm(d ~ Treatment, data = shannon)
+    # this code would get rid of collinearity with Treatment +  Plot
+                    
+Anova(anova_diversity2, type="III") 
+```
+
+```{r echo=TRUE}
+# Test assumptions and plot residuals 
+res_div2 <- resid(anova_diversity2)
+plot(fitted(anova_diversity2), res_div2)
+abline(0,0)
+
+# Run a levene's test
+library(car)
+leveneTest(d ~ Treatment, data = shannon)
+```
+
+Now, let's move on to species richness
+
+```{r species richness}
+# For this, we use the package "vegan"
+
+# How speciose are my communities? (summation of number of species)
+sppr <- specnumber(pivot_data)
+
+# Let's extract the rows of interest form the env dataframe
+treat.df <- data.frame(env$plot.no, env$treatment)
+
+# Make a plot of species count and treatment 
+plot(sppr ~ treat.df$env.treatment)
+```
+
+```{r echo=TRUE}
+# Run the test
+sppr_aov <- aov(sppr ~ env.treatment, data = treat.df)
+summary(sppr_aov)
+```
+
+```{r echo=TRUE}
+# Test the assumptions and plot residuals
+# Plot the residuals 
+res_rich <- resid(sppr_aov)
+plot(fitted(sppr_aov), res_rich)
+abline(0,0)
+```
+
+```{r echo=TRUE}
+# Run a levene's test
+leveneTest(sppr ~ env.treatment, data = treat.df)
+```
+
+```{r}
+# Calculate mean species richness
+treat.df$sppr <- sppr # add the values of sppr to the treat.df data frame
+
+r_natural<-treat.df[which(treat.df$env.treatment == "natural"),]
+r_innoculation<-treat.df[which(treat.df$env.treatment == "innoculation"),]
+r_fungicide<-treat.df[which(treat.df$env.treatment == "fungicide"),]
+
+mean(r_natural$sppr)
+mean(r_innoculation$sppr)
+mean(r_fungicide$sppr)
+
+
+# Now, let's perform a Tukey's test
+tukey.rich <- TukeyHSD(sppr_aov)
+tukey.rich
+plot(tukey.rich)
+```
+
+## INDICATOR SPECIES ANALYSIS 
+For this, we use the package "indicspecies" (already loaded)
+
+```{r indicator species, echo=TRUE}
+# Let's determine indicator species
+
+indval3 <- multipatt(pivot_data, env$treatment, 
+                    control = how(nperm = 9999))
+  # NOTE - help pages suggest to make one data frame that includes treatment
+  # and pivot data, this doesn't always work! Better to use pivot data and a separate
+  # file for treatment groups 
+  # https://cran.r-project.org/web/packages/indicspecies/vignettes/IndicatorSpeciesAnalysis.html#indicato r-species-analysis-using-multipatt
+
+summary(indval3, indvalcomp=TRUE)
+```
+
+```{r echo=TRUE}
+# Let's look at more species that aren't significant (a = 1)
+# This is just for fun!!! 
+summary(indval3, alpha = 1)
+```
+
+## ANALYZING PLANT GROWTH METRIC DATA 
+Here, we look at plant height and leaf mass per area (LMA) 
+
+```{r plant growth metric}
+lm_lma<-lm(LMA.g.m2 ~ treatment, data = LMA.data)
+lm_height<-lm(plant.height.cm ~ treatment, data = LMA.data)
+
+Anova(lm_lma)
+Anova(lm_height)
+```
+
+```{r}
+# Let's check assumptions 
+# Plot the residuals for height
+res_height <- resid(lm_height)
+plot(fitted(lm_height), res_height)
+abline(0,0)
+
+# Run a levene's test for height
+library(car)
+leveneTest(plant.height.cm ~ treatment, data = LMA.data)
+
+# Plot the residuals for lma
+res_lma <- resid(lm_lma)
+plot(fitted(lm_lma), res_lma)
+abline(0,0)
+
+# Run a levene's test for lma
+leveneTest(LMA.g.m2 ~ treatment, data = LMA.data)
+```
+
+## DETERMINING DIFFERENCES IN BACTERIAL ABUNDANCE 
+
+```{r bac abundance}
+# make linear model
+lm.bac.new <- lm(total.bac ~ treatment, data = new.bac)
+anova(lm.bac.new)
+
+
+plot(total.bac ~ treatment, data = new.bac)
+```
+
+```{r}
+# Get the mean abundance of each treatment group 
+bac_natural<-new.bac[which(new.bac$treatment == "natural"),]
+bac_innoculation<-new.bac[which(new.bac$treatment == "innoculation"),]
+bac_fungicide<-new.bac[which(new.bac$treatment == "fungicide"),]
+
+# Run Tukey's HSD test
+bac.aov <- aov(lm.bac.new) # need to use aov function to run Tukey's, I think
+tukey.bac <- TukeyHSD(bac.aov)
+tukey.bac
+plot(tukey.bac)
+```
+
+### VISIBLE PATHOGEN DAMAGE ANALYSIS 
+
+```{r path damage analysis}
+# We need to create a subset of the env data set for this analysis 
+sep<-env
+sep$septoria<-pivot_data$Septoria_dysentericae
+sep
+```
+
+Some notes about this dataset for clarity: the column "final.pathogen" represents the visual appearance of pathogen damage tabulated from the observers. "septoria" represents the presence of Septoria dysentericae isolates found in culture. 
+
+```{r}
+##Looking at the 0/1 binomial response data if pathogen damage was there or not
+##Take-home point: Fungicide-treated plants had less visible damage
+str(sep)
+lm_damage <- glm((final.pathogen ~ treatment), family = binomial, data = sep)
+Anova(lm_damage)
+summary(lm_damage)
+
+##Can't run a Tukey directly on a GLM with binomial response, have to calculate predicted probabilities and then run it
+# Compute estimated marginal means
+library(emmeans)
+library(multcomp)
+emm <- emmeans(lm_damage, ~treatment)
+# Perform post hoc tests for pairwise comparisons
+posthoc <- contrast(emm, method = "pairwise", adjust = "tukey")
+
+# View the results
+summary(posthoc)
+```
+
+# BIOLOGICAL CONTROL TRIAL 
+Now, we get to shift gears and move onto the second part of the manuscript which is the corn earworm biological control trial. 
+
+## CHOICE TRIAL ANALYSIS
+```{r choice analysis, echo=TRUE}
+# Create linear model to run ANOVA 
+lm_foodpref <- lm(food.diff~foodtype, data = food)
+
+#Testing normality of residuals using Shapiro-Wilk test
+shapiro.test(lm_foodpref$resid)
+# p = 0.53 so we can assume normality
+
+# Plot to test for all other assumptions
+par(mfrow = c(2,2))
+plot(lm_foodpref)
+```
+
+```{r echo=TRUE}
+anova(lm_foodpref)
+```
+
+```{r}
+# Determine mean food consumption of each treatment group
+eaten_control <- food[which(food$foodtype == "no"),]
+eaten_high <- food[which(food$foodtype == "high"),]
+
+# Now, we calculate mean amount of food eaten in each group (g) 
+mean(eaten_control$food.diff)
+mean(eaten_high$food.diff)
+
+# Now, let's calculate standard error
+print(std.error(eaten_control$food.diff))
+print(std.error(eaten_high$food.diff))
+```
+
+Here, we run an anova as a "good measure" to see if gave the larvae the same amount of food (in grams) at the beginning of the experiment. 
+```{r}
+## Just to check, could the result above be because food mass differed at the start of the experiment?
+lm_foodinitial <- lm(initialfoodmass~foodtype, data = food) 
+anova(lm_foodinitial)
+
+plot(lm_foodinitial) 
+
+hist(food$initialfoodmass)
+```
+
+## SURVIVAL TRIAL ANALYSIS 
+
+```{r survival analysis, echo=TRUE}
+# perform analysis
+cox_survival<- coxph(formula = Surv(time, status) ~ diet.num, data = corncox)
+cox_survival
+```
+
+```{r}
+res.cox.fit <- survfit(Surv(time, status) ~ diet, data = corncox)
+ggsurvplot(res.cox.fit)
+cox_z_survival<-cox.zph(cox_survival)
+ggcoxzph(cox_z_survival)
+```
+
+```{r}
+# Plot for cox regression (Thanks, Connor!)
+
+  # export just the plot so that it can be more easily worked into multi-panel settings
+test= ggsurvplot(res.cox.fit)
+gg.surv= test$plot
+
+gg.surv= gg.surv +
+  xlab("Day") +
+  scale_color_manual(values=c("#E69F00","#7fcdbb", "#56B4E9"))+
+  theme_classic(base_size = 18)+
+  theme(legend.position = "none") 
+
+survival.plot= ggsurvplot(res.cox.fit,
+                          palette= c("#E69F00","#7fcdbb", "#56B4E9"),
+                          legend.title = expression(paste(italic("Ophiocordyceps"), " sp. Diet Treatment")),
+                          legend.labs = c("High","Low", "Control"),
+                          legend= c(0.8, 0.8)) +
+  xlab("Days") 
+
+gg.surv
+```
