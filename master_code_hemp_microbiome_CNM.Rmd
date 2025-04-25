@@ -440,6 +440,28 @@ print(std.error(eaten_control$food.diff))
 print(std.error(eaten_high$food.diff))
 ```
 
+Graph 
+
+```{r}
+
+choice.plot= ggplot(data = food, aes(x = foodtype, y = food.diff, fill = foodtype)) +
+  geom_boxplot() + 
+  geom_jitter() +
+  xlab("") + ylab("Food Consumed (g)") + 
+  theme(panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  theme(axis.title.x = element_text(size=18),
+        axis.text.x  = element_text(size=16)) + 
+  theme(axis.title.y = element_text(size=18),
+        axis.text.y  = element_text(size=16)) + 
+  theme(legend.position = "none") +
+  scale_fill_manual(values=c("#E69F00", "#56B4E9")) +
+  scale_x_discrete(labels=c(expression(paste("High ", italic("Ophiocordyceps"), " sp. Diet")), 'Control')) +
+  theme(legend.key = element_rect(fill = "transparent"))
+
+ggsave(choice.plot, file= "diet choice.jpg", dpi=600, width= 7, height= 5)
+```
+
+
 Here, we run an anova as a "good measure" to see if gave the larvae the same amount of food (in grams) at the beginning of the experiment. 
 ```{r}
 ## Just to check, could the result above be because food mass differed at the start of the experiment?
@@ -470,21 +492,14 @@ ggcoxzph(cox_z_survival)
 # Plot for cox regression (Thanks, Connor!)
 
   # export just the plot so that it can be more easily worked into multi-panel settings
-test= ggsurvplot(res.cox.fit)
-gg.surv= test$plot
-
-gg.surv= gg.surv +
-  xlab("Day") +
-  scale_color_manual(values=c("#E69F00","#7fcdbb", "#56B4E9"))+
-  theme_classic(base_size = 18)+
-  theme(legend.position = "none") 
-
-survival.plot= ggsurvplot(res.cox.fit,
+survival.plot= ggsurvplot(res.cox.fit, conf.int = T,
                           palette= c("#E69F00","#7fcdbb", "#56B4E9"),
-                          legend.title = expression(paste(italic("Ophiocordyceps"), " sp. Diet Treatment")),
+                          legend.title = "",
                           legend.labs = c("High","Low", "Control"),
-                          legend= c(0.8, 0.8)) +
-  xlab("Days") 
+                          legend= "top") 
+  
+survival.plot + xlab("Days")
 
-gg.surv
+test= survival.plot$plot
+ggsave(test, file= "survival.jpg", dpi=600, height= 3, width= 5)
 ```
